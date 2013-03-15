@@ -12,6 +12,7 @@
 #include <linux/if.h>
 #include <linux/if_tun.h>
 #include <sys/ioctl.h>
+#include <arpa/inet.h>
 
 #include "wiselib_tunslip6.h"
 
@@ -37,7 +38,7 @@ int working_mode = 0;
 FILE* wisebed_listening_file = NULL;
 char * wisebed_listening_pipe = "/tmp/wisebed_listening_pipe";
 
-//urn:wisebed:uzl1:,593972096FE9C1633325DC08C872FCF9
+//sudo ./a.out -W -Rurn:wisebed:uzl1:,2A5A6A472E93E6E2970980E2D575284C -Burn:wisebed:uzl1:0x2100
 //Global WISEBED parameters
 char* ipaddr = NULL;
 char* reservation_key = NULL;
@@ -160,7 +161,7 @@ int main(int argc, char **argv)
         strcpy(tundev, "tun1");
     }
     
-    printf("things: %s %s %s %s %s", reservation_key, border_router_node, config_path, exp_path, ipaddr );
+//     printf("things: %s %s %s %s %s", reservation_key, border_router_node, config_path, exp_path, ipaddr );
     
     //exit(0);
     //For IO handling
@@ -204,9 +205,6 @@ int main(int argc, char **argv)
     
     printf( "Opened tunnel device ''/dev/%s''\n", tundev );
     
-    //Hack:
-    //char* ipaddr = "2001:630:301:6453::1/64";
-    
     //Configure the interface
     ifconf_tun( tundev, ipaddr );
     
@@ -227,9 +225,9 @@ int main(int argc, char **argv)
         //Set the rset for the listening pipe
         FD_SET(wisebed_listening_fd, &rset);
         if(wisebed_listening_fd > maxfd) maxfd = wisebed_listening_fd;
-        //Set the rset for the tunnel //NOTE TURNED OFF
-        //FD_SET(tunnel_fd, &rset);
-        //if(tunnel_fd > maxfd) maxfd = tunnel_fd;
+        //Set the rset for the tunnel
+        FD_SET(tunnel_fd, &rset);
+        if(tunnel_fd > maxfd) maxfd = tunnel_fd;
     
         //Wait here, until one of the files are ready
         int ret = select(maxfd + 1, &rset, NULL, NULL, NULL);//&timeout);
@@ -255,7 +253,7 @@ int main(int argc, char **argv)
             if(FD_ISSET(tunnel_fd, &rset)) 
             {
                 //Read from the ipv6 tunnel and call the java send
-                tun_to_pipe();
+                tun_to_wisebed();
             }
         }
     }
@@ -263,141 +261,189 @@ int main(int argc, char **argv)
 
 /*---------------------------------------------------------------------*/
 
-#define READ_PHASE_DATE 0
-#define READ_PHASE_PIPE1 1
-#define READ_PHASE_URN 2
-#define READ_PHASE_PIPE2 3
-#define READ_PHASE_STRING 4
-#define READ_PHASE_PIPE3 5
-#define READ_PHASE_HEX 6
-#define READ_PHASE_NL 7
+
+//Input: wisebedURN|sizeofmessage|message
+
+#define READ_PHASE_URN 0
+#define READ_PHASE_SIZE 1
+#define READ_PHASE_HEX 2
+
 int read_from_pipe_phase = 0;
-int used_sequence = 1;
-//int synchronized = 0;
+unsigned char pipe_buffer[BUFFER_SIZE];
+int buffer_actual_position = 0;
 
 int pipe_to_tun( FILE* pipe_file, int tunnel_fd )
 {
-    unsigned char buffer[BUFFER_SIZE];
-    int used_line = 1;
+	//used_line indicates that the actual output line is from the selected border_router_node
+	int used_line = 1;
+	
+	unsigned char URNbuffer[50];
     
-    //We interested in only the URN and the HEX
-    
-    if( (read_from_pipe_phase != READ_PHASE_URN) && (read_from_pipe_phase != READ_PHASE_HEX) )
-        used_line = 0;
-    
-    
-    int i = 0;
-    for(i=0; i < BUFFER_SIZE; i++ )
-         buffer[i] = 0;
-    
-    
-    int actual_read_bytes = 0;
-    
-//     printf( "From pipe: UsedL: %d Called mode: %d\n", used_line, read_from_pipe_phase);
-    while(1)
-    {
-        unsigned char c;
-        if( fread(&c, 1, 1, pipe_file ) == 0 )
-        {
-            clearerr(pipe_file);
-            break;
-        }
-        
-        //Process only if it is a needed line
-        if( used_line )
-        {
-            //Store the next char from the URN
-            if( read_from_pipe_phase == READ_PHASE_URN )
-            {
-                buffer[actual_read_bytes++] = c;
-            }
-            else //READ_PHASE_HEX
-            {
-                unsigned char tmp = read_stringhex( pipe_file );
-                
-                if( actual_read_bytes == 0 )
-                {
-                    //First byte and it is 0x69 --> this is a UART message
-                    if( tmp == 0x69 )
-                    {
-                        actual_read_bytes++;
-                        continue;
-                    }
-                    //First byte with anything else --> this is Debug message, drop the line
-                    else
-                        used_line = 0;
-                }
-                //Non first byte --> only reached if it is a byte from a UART message
-                else
-                {   
-                    // -1 because of the initial byte
-                    buffer[actual_read_bytes-1] = tmp;
-                    actual_read_bytes++;
-                }
-            }
-        }
-        //Drop the non needed lines --> DEBUG read
-        else        
-            buffer[actual_read_bytes++] = c;    
-        
-    }
-    
-    
-    
-//     if( read_from_pipe_phase == READ_PHASE_HEX )
-        printf( "From pipe:Phase %d Line: %d sequence: %d Read bytes from pipe: %i char: %s\n", read_from_pipe_phase, used_line, used_sequence, actual_read_bytes, buffer);
-    
-    //If this is a URN, then it against the configured border router
-    if( read_from_pipe_phase == READ_PHASE_URN )
-    {
-        //Mark the actual sequence
-        if( 0 == strncmp( border_router_node, buffer, sizeof(border_router_node) ) )
-            used_sequence = 1;
-        else
-            used_sequence = 0;
-        
-        printf( "From pipe: NODE (%s)\n", buffer);
-    }    
-    else if( read_from_pipe_phase == READ_PHASE_HEX && used_line && used_sequence )
-    {
-        //Correct the first byte
-        actual_read_bytes -= 1;
-        
-        printf( "From pipe: Read bytes from pipe: %i\n", actual_read_bytes);
-        
-//         int b = 0;
-//         for(b = 0; b < actual_read_bytes; b++)
-//             printf("%x ", buffer[b]);
-        
-        //IPv6 version check
-        if( (buffer[0] >> 4) == 6 )
-        {
-            //Get the IPv6 size from the header
-            int ipv6_payload_size = buffer[4] << 8 | (buffer[5]);
-            //Check the received bytes
-            if( (ipv6_payload_size + 40) == actual_read_bytes )
-            {
-                //Write the buffer to the tunnel interface
-                if(write(tunnel_fd, buffer, actual_read_bytes) != actual_read_bytes) 
-                {
-                    error(EXIT_FAILURE, 1, "From pipe: Error when writing to tun");
-                }
-                printf( "From pipe: IPv6 packet has been writen to tun\n");
-            }
-            else
-            {
-                printf( "From pipe: IPv6 packet size error (expected: %d, captured: %d), dropped\n", ipv6_payload_size+40, actual_read_bytes );
-            }
-        }
-        else
-        {
-            printf( "From pipe: Non IPv6 packet, dropped\n");
-        }
-    }
-    
-    //Next phase modulo 8
-    read_from_pipe_phase += 1;
-    read_from_pipe_phase %= 8;
+	//read bytes for the actual message
+	int read_bytes_from_hex_part = 0;
+	
+	//Size of the hex part (urn|SIZE|hex)
+	int size_of_the_hex_part = -1;
+	
+	//Size of the URN for buffer storage
+	int urn_size = 0;
+	
+// 	printf( "From pipe: Called mode: %d\n", used_line, read_from_pipe_phase);
+	while(1)
+	{
+		unsigned char c;
+		if( fread(&c, 1, 1, pipe_file ) == 0 )
+		{
+			clearerr(pipe_file);
+			break;
+		}
+		
+// 		printf( "Read: %i Max: %i Phase: %i \n", read_bytes_from_hex_part, size_of_the_hex_part, read_from_pipe_phase);
+		
+		//Process PHASE shifts, delimited with |
+		if( read_from_pipe_phase != READ_PHASE_HEX && c == '|' )
+		{
+			//Test the URN
+			if( read_from_pipe_phase == READ_PHASE_URN )
+			{
+				//Mark the actual sequence
+				if( 0 == strncmp( border_router_node, URNbuffer, sizeof(border_router_node) ) )
+					used_line = 1;
+				else
+					used_line = 0;
+				
+// 				printf( "From pipe: NODE (%s)\n", URNbuffer);
+			}
+			else
+// 				printf( "From pipe: HEX size (%d)\n", size_of_the_hex_part);
+			read_from_pipe_phase++;
+			continue;
+		}
+		
+		//----- PROCESS
+		
+		//Store the next char from the URN
+		if( read_from_pipe_phase == READ_PHASE_URN )
+		{
+			URNbuffer[urn_size++] = c;
+		}
+		else if( read_from_pipe_phase == READ_PHASE_SIZE )
+		{
+			if( size_of_the_hex_part == -1 )
+				size_of_the_hex_part = 0;
+			else
+				size_of_the_hex_part *= 10;
+			//to ASCII
+			size_of_the_hex_part += c - 48;
+		}
+		else //READ_PHASE_HEX
+		{
+			unsigned char tmp = read_stringhex( pipe_file );
+			read_bytes_from_hex_part++;
+			
+// 			printf("READ HEX: %x\n", tmp);
+			//Process only the used lines, and only read out the non used ones from the pipe
+			//if( used_line == 0 )
+			//	read_bytes_from_hex_part++;
+			//else
+			if( used_line == 1 )
+			{
+				if( read_bytes_from_hex_part - 1 == 0 )
+				{
+					
+					//First byte and it is 0x69 --> this is a UART message
+					if( tmp == 0x69 )
+						continue;
+					//First byte with anything else --> this is Debug message, drop the line
+					else
+						used_line = 0;
+				}
+				//Non first byte --> only reached if it is a byte from a UART message
+				else
+				{
+					//Get the END and ESC escape characters
+					if( tmp == SLIP_ESC )
+					{
+						//Escaped byte --> Read one more
+						tmp = read_stringhex( pipe_file );
+						read_bytes_from_hex_part++;
+						
+						//Escaped ESC
+						if( tmp == SLIP_ESC_ESC )
+							pipe_buffer[buffer_actual_position++] = SLIP_ESC;
+						if( tmp == SLIP_ESC_END )
+							pipe_buffer[buffer_actual_position++] = SLIP_END;
+					}
+					//End of the IP packet, send it to the tunnel
+					else if( tmp == SLIP_END )
+					{
+						//If this is the initial END (buffer_actual_position == 0) then just continue
+						if( buffer_actual_position > 0 )
+						{
+	// 						//IPv6 version check
+	// 						if( (pipe_buffer[0] >> 4) == 6 )
+	// 						{
+	// 							//Get the IPv6 size from the header
+	// 							int ipv6_payload_size = pipe_buffer[4] << 8 | (pipe_buffer[5]);
+	// 							//Check the received bytes
+	// 							if( (ipv6_payload_size + 40) == actual_read_bytes )
+	// 							{
+								
+									
+								//Write the buffer to the tunnel interface
+								if(write(tunnel_fd, pipe_buffer, buffer_actual_position) != buffer_actual_position) 
+								{
+									error(EXIT_FAILURE, 1, "From pipe: Error when writing to tun");
+								}
+								printf( "From pipe: IPv6 packet has been writen to tun (size %i)\n", buffer_actual_position);
+								
+// 								int b = 0;
+// 								for(b = 0; b < buffer_actual_position; b++)
+// 									printf("%x ", pipe_buffer[b]);
+// 								printf("\n");
+								
+								//Reset the storage
+								buffer_actual_position = 0;
+	// 							}
+	// 							else
+	// 							{
+	// 								printf( "From pipe: IPv6 packet size error (expected: %d, captured: %d), dropped\n", ipv6_payload_size+40, actual_read_bytes );
+	// 							}
+	// 						}
+	// 						else
+	// 						{
+	// 							printf( "From pipe: Non IPv6 packet, dropped\n");
+	// 						}
+						}
+					}
+					//Only store the byte
+					else
+					{
+						pipe_buffer[buffer_actual_position++] = tmp;
+					}
+				}
+			}
+			
+			
+		}
+		
+		//End of the message, reset the phase to READ_PHASE_URN
+		if( read_bytes_from_hex_part == size_of_the_hex_part )
+		{
+// 			int b = 0;
+// 			for(b = 0; b < buffer_actual_position; b++)
+// 				printf("%x ", pipe_buffer[b]);
+// 			printf("\n");
+// 								
+// 			printf( "From pipe: End of message\n");
+							
+			read_from_pipe_phase = 0;
+			read_bytes_from_hex_part = 0;
+			size_of_the_hex_part = -1;
+			urn_size = 0;
+			used_line = 1;
+		}
+	}
 }
 
 unsigned char read_stringhex( FILE* pipe_file )
@@ -442,53 +488,190 @@ unsigned char read_stringhex( FILE* pipe_file )
 
 /*---------------------------------------------------------------------*/
 
-void tun_to_pipe()
+void tun_to_wisebed()
 {
-    unsigned char tunbuffer[BUFFER_SIZE];
-    int size;
+	unsigned char tunbuffer[BUFFER_SIZE];
+	int size;
 
-    //Read from the tun file
-    if((size = read(tunnel_fd, tunbuffer, BUFFER_SIZE)) == -1) 
-        error(EXIT_FAILURE, 1, "From tun: Error when reading from tun");
-    
-    if(size > 0)
-    {
-            int sending_shift = 0;
-            do
-            {   
-                    //Determine the size of the actual message fragment
-                    int actual_sending_size = SENDING_TO_WISEBED_MAX_SIZE;
-                    
-                    //If the message is shorter
-                    if( size < actual_sending_size )
-                        actual_sending_size = size;
-                    
-                    
-                    //Parse into the tunbuffer
-                    int i;
-                    unsigned char* buf_str = (unsigned char*) malloc (5*actual_sending_size);
-                    unsigned char* buf_ptr = buf_str;
-                    for (i = 0; i < size; i++)
-                    {
-                        buf_ptr += sprintf(buf_ptr, "0x%02X,", tunbuffer[i+sending_shift]);
-                    }
-                    *(buf_ptr - 1) = '\0';
-                    
-                    //Call the java sending
-                    //ssystem( "java -Dtestbed.secretreservationkeys=%s -Dtestbed.message=%s -Dtestbed.listtype=%s -Dtestbed.nodeurns=%s -jar wisebed/lib/tr.scripting-client-0.8-onejar.jar -p %s -f wisebed/scripts/wb-send.java", reservation_key, buf_str, list_type, border_router_node, config_path );
-                    printf( "from TUN: %s\n", buf_str );
-                    
-                    free( buf_str );
-                    
-                    //add sent bytes
-                    sending_shift += actual_sending_size;
-                    //reduce remaining size
-                    size -= actual_sending_size;
-                    
+	//Read from the tun file
+	if((size = read(tunnel_fd, tunbuffer, BUFFER_SIZE)) == -1) 
+		error(EXIT_FAILURE, 1, "From tun: Error when reading from tun");
+	
+	int first_fragment = 1;
+	
+	if(size > 0)
+	{
+		int sending_shift = 0;
+		do
+		{ 
+			int maximum_sendable_size = SENDING_TO_WISEBED_MAX_SIZE;
+			
+			//Determine the size of the actual message fragment,
+			int actual_sending_size = maximum_sendable_size;
+			
+			//If the message is shorter
+			if( size < actual_sending_size )
+				actual_sending_size = size;
+			
+			
+			//Parse into a tunbuffer
+			unsigned char buf_str[10*actual_sending_size];
+			unsigned char* buf_ptr = buf_str;
+			
+			//Initial 0x0A byte which is needed for the WISEBED communication
+			buf_ptr += sprintf(buf_ptr, "0x%02X,", SLIP_SEND_WISEBED_INITIAL);
+			
+			//Initial END for the IP packet
+			if( first_fragment == 1 )
+			{
+				buf_ptr += sprintf(buf_ptr, "0x%02X,", SLIP_END);
+				first_fragment = 0;
+				//Reduce the max bytes to prevent longer messages than expected if it is needed
+				if( actual_sending_size == maximum_sendable_size )
+				{
+					maximum_sendable_size--;
+					actual_sending_size--;
+				}
+			}
+			
+			int i;
+			for (i = 0; i < actual_sending_size; i++)
+			{
+				//Escape the ESC and END characters
+				if( tunbuffer[i+sending_shift] == SLIP_END )
+				{
+					buf_ptr += sprintf(buf_ptr, "0x%02X,", SLIP_ESC);
+					buf_ptr += sprintf(buf_ptr, "0x%02X,", SLIP_ESC_END);
+					//Reduce the max bytes to prevent longer messages than expected if it is needed
+					//If this was the last byte in the loop, then the message will be longer...
+					//but do not loose a byte from the IP packet
+					if( actual_sending_size == maximum_sendable_size && i < (actual_sending_size-1) )
+					{
+						maximum_sendable_size--;
+						actual_sending_size--;
+					}
+				}
+				else if( tunbuffer[i+sending_shift] == SLIP_ESC )
+				{
+					buf_ptr += sprintf(buf_ptr, "0x%02X,", SLIP_ESC);
+					buf_ptr += sprintf(buf_ptr, "0x%02X,", SLIP_ESC_ESC);
+					//Reduce the max bytes to prevent longer messages than expected if it is needed
+					//If this was the last byte in the loop, then the message will be longer...
+					//but do not loose a byte from the IP packet
+					if( actual_sending_size == maximum_sendable_size && i < (actual_sending_size-1) )
+					{
+						maximum_sendable_size--;
+						actual_sending_size--;
+					}
+				}
+				else
+					buf_ptr += sprintf(buf_ptr, "0x%02X,", tunbuffer[i+sending_shift]);
+			}
+			//add sent bytes
+			sending_shift += actual_sending_size;
+			//reduce remaining size
+			size -= actual_sending_size;
+			
+			//Add the END to the end of the IP packet
+			if( size == 0 )
+			{
+				buf_ptr += sprintf(buf_ptr, "0x%02X,", SLIP_END);
+				first_fragment = 0;
+			}
+			
+			*(buf_ptr - 1) = '\0';
+			
+			//Call the java sending
+			ssystem( "java -Dtestbed.secretreservationkeys=%s -Dtestbed.message=%s -Dtestbed.listtype=%s -Dtestbed.nodeurns=%s -jar wisebed/lib/tr.scripting-client-0.8-onejar.jar -p %s -f wisebed/scripts/wb-send.java", reservation_key, buf_str, list_type, border_router_node, config_path );
+			//printf( "from TUN: %s size %i\n", buf_str, size );
+			
+			
+			
 
-            }while( size > 0 );
-      }
+		}while( size > 0 );
+	}
 }
+
+/*---------------------------------------------------------------------*/
+
+void router_configuration_to_wisebed()
+{
+	unsigned char configbuffer[BUFFER_SIZE];
+	int size = 0;
+
+	//---------IPv6 header---------
+	strncpy( configbuffer, CONFIG_IPV6_HEADER, sizeof(CONFIG_IPV6_HEADER) );
+	size+= sizeof(CONFIG_IPV6_HEADER) -1;
+	
+	strncpy( configbuffer+size, CONFIG_IPV6_SOURCE, sizeof(CONFIG_IPV6_SOURCE) );
+	size+= sizeof(CONFIG_IPV6_SOURCE) -1;
+	
+	strncpy( configbuffer+size, CONFIG_IPV6_DESTINATION, sizeof(CONFIG_IPV6_DESTINATION) );
+	size+= sizeof(CONFIG_IPV6_DESTINATION) -1;
+	
+	//Add host part of the destination address (8bytes)
+	//TODO HACK
+	unsigned char hostID[]= {0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff};
+	
+	int i;
+	for( i = 0; i < 8; i++ )
+		size += sprintf(configbuffer+size, "0x%02X,", hostID[i]);
+	
+	//---------ICMPv6 header---------
+	strncpy( configbuffer+size, CONFIG_ICMPV6_HEADER, sizeof(CONFIG_ICMPV6_HEADER) );
+	size+= sizeof(CONFIG_ICMPV6_HEADER) -1;
+	
+	//Options
+	//---------ABRO---------
+	strncpy( configbuffer+size, CONFIG__ABRO, sizeof(CONFIG__ABRO) );
+	size+= sizeof(CONFIG__ABRO) -1;
+	
+	//Add global address of the border router (16bytes)
+	//Ipv6 string to byte array conversion
+	unsigned char global_address_buffer[sizeof(struct in6_addr)];
+	unsigned char* ipaddr_without_prefix_len = strdup( ipaddr );
+	ipaddr_without_prefix_len[strlen(ipaddr_without_prefix_len)-4] = '\0';
+
+	if (inet_pton(AF_INET6, ipaddr_without_prefix_len, global_address_buffer) != 1)
+	{
+		error(EXIT_FAILURE,0,"IPv6 parsing failed! Exit");
+	}
+	
+	//Set the prefix part
+	
+	for( i = 0; i < 8; i++ )
+		size += sprintf(configbuffer+size, "0x%02X,", global_address_buffer[i]);
+	//Set the hostID part
+	for( i = 0; i < 8; i++ )
+		size += sprintf(configbuffer+size, "0x%02X,", hostID[i]);
+	
+	
+	//---------PIO---------
+	strncpy( configbuffer+size, CONFIG_PIO, sizeof(CONFIG_PIO) );
+	size+= sizeof(CONFIG_PIO) -1;
+	//Add prefix with 0-s at the host part (16bytes)
+	for( i = 0; i < 16; i++ )
+		size += sprintf(configbuffer+size, "0x%02X,", global_address_buffer[i]);
+	
+	
+	//--------6CO---------
+	strncpy( configbuffer+size, CONFIG_6CO, sizeof(CONFIG_6CO) );
+	size+= sizeof(CONFIG_6CO) -1;
+	//Add prefix only (8 bytes)
+	for( i = 0; i < 8; i++ )
+		size += sprintf(configbuffer+size, "0x%02X,", global_address_buffer[i]);
+	
+	//Close the string
+	configbuffer[size-1] = '\0';
+	
+	//TODO SEND TO WISEBED
+	printf("RA: %s\n\n", configbuffer );
+	
+	
+	free(ipaddr_without_prefix_len);
+}
+
+/*---------------------------------------------------------------------*/
 
 /*---------------------------------------------------------------------*/
 
