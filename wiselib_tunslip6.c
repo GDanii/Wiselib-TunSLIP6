@@ -38,7 +38,7 @@ int working_mode = 0;
 FILE* wisebed_listening_file = NULL;
 char * wisebed_listening_pipe = "/tmp/wisebed_listening_pipe";
 
-//sudo ./a.out -W -Rurn:wisebed:uzl1:,2A5A6A472E93E6E2970980E2D575284C -Burn:wisebed:uzl1:0x2100
+//sudo ./a.out -W -Rurn:wisebed:uzl1:,9E3FD7EC778C38847F229707C300D347 -Burn:wisebed:uzl1:0x2100
 //Global WISEBED parameters
 char* ipaddr = NULL;
 char* reservation_key = NULL;
@@ -162,7 +162,7 @@ int main(int argc, char **argv)
     }
     
 //     printf("things: %s %s %s %s %s", reservation_key, border_router_node, config_path, exp_path, ipaddr );
-    
+
     //exit(0);
     //For IO handling
     fd_set rset, wset;
@@ -208,6 +208,11 @@ int main(int argc, char **argv)
     //Configure the interface
     ifconf_tun( tundev, ipaddr );
     
+    //Wait 2 seconds
+    sleep(2);
+    
+    router_configuration_to_buffer();
+    
   
     //Set the timeout for the select function
     //timeout.tv_sec = 1;
@@ -228,7 +233,7 @@ int main(int argc, char **argv)
         //Set the rset for the tunnel
         FD_SET(tunnel_fd, &rset);
         if(tunnel_fd > maxfd) maxfd = tunnel_fd;
-    
+// 	printf("Wait\n");
         //Wait here, until one of the files are ready
         int ret = select(maxfd + 1, &rset, NULL, NULL, NULL);//&timeout);
         
@@ -245,6 +250,7 @@ int main(int argc, char **argv)
             //Test wisebed listening pipe
             if(FD_ISSET(wisebed_listening_fd, &rset)) 
             {
+// 		    printf("Read from PIPE\n");
                 //Read from the pipe, write to the tun interface
                 pipe_to_tun( wisebed_listening_file, tunnel_fd );
             }
@@ -252,8 +258,9 @@ int main(int argc, char **argv)
             //Tunnel
             if(FD_ISSET(tunnel_fd, &rset)) 
             {
+// 		    printf("Read from TUN\n");
                 //Read from the ipv6 tunnel and call the java send
-                tun_to_wisebed();
+                tun_to_buffer();
             }
         }
     }
@@ -314,7 +321,7 @@ int pipe_to_tun( FILE* pipe_file, int tunnel_fd )
 				
 // 				printf( "From pipe: NODE (%s)\n", URNbuffer);
 			}
-			else
+// 			else
 // 				printf( "From pipe: HEX size (%d)\n", size_of_the_hex_part);
 			read_from_pipe_phase++;
 			continue;
@@ -488,7 +495,51 @@ unsigned char read_stringhex( FILE* pipe_file )
 
 /*---------------------------------------------------------------------*/
 
-void tun_to_wisebed()
+void router_configuration_to_buffer()
+{
+	//Construct the message with defined fix values, the address parts are padded with 0-s here
+	unsigned char configbuffer[] = { C_ND_INITIALS C_IPV6_HEADER C_IPV6_SOURCE C_IPV6_DESTINATION C_PADDING_8 C_COMA C_ICMPV6_HEADER C_ABRO C_PADDING_16 C_PIO C_PADDING_16 C_6CO C_PADDING_8 };
+	int size = C_SIZE;
+	
+	//---------------Add the hostID part to the padded places
+	//TODO HACK
+	unsigned char hostID[]= {0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff};
+	
+	//IPv6 Target address hostID 34 - 41 and ABRO 74 - 81
+	int i;
+	for( i = 0; i < 8; i++ )
+	{
+		configbuffer[i+34] = hostID[i];
+		configbuffer[i+74] = hostID[i];
+	}
+	
+	//---------------Add the prefix part to the padded places
+	//Ipv6 string to byte array conversion
+	unsigned char global_address_buffer[sizeof(struct in6_addr)];
+	unsigned char* ipaddr_without_prefix_len = strdup( ipaddr );
+	ipaddr_without_prefix_len[strlen(ipaddr_without_prefix_len)-4] = '\0';
+
+	if (inet_pton(AF_INET6, ipaddr_without_prefix_len, global_address_buffer) != 1)
+	{
+		error(EXIT_FAILURE,0,"IPv6 parsing failed! Exit");
+	}
+	
+	//ABRO: 66 - 74, PIO: 98 - 106, 6CO 122 - 130
+	for( i = 0; i < 8; i++ )
+	{
+		configbuffer[i+66] = global_address_buffer[i];
+		configbuffer[i+98] = global_address_buffer[i];
+		configbuffer[i+122] = global_address_buffer[i];
+	}
+	
+	buffer_to_wisebed(configbuffer, size);
+	
+	free(ipaddr_without_prefix_len);
+}
+
+/*---------------------------------------------------------------------*/
+
+void tun_to_buffer()
 {
 	unsigned char tunbuffer[BUFFER_SIZE];
 	int size;
@@ -497,6 +548,13 @@ void tun_to_wisebed()
 	if((size = read(tunnel_fd, tunbuffer, BUFFER_SIZE)) == -1) 
 		error(EXIT_FAILURE, 1, "From tun: Error when reading from tun");
 	
+	buffer_to_wisebed( tunbuffer, size );
+}
+
+/*---------------------------------------------------------------------*/
+
+void buffer_to_wisebed( unsigned char* tunbuffer, int size )
+{
 	int first_fragment = 1;
 	
 	if(size > 0)
@@ -591,87 +649,6 @@ void tun_to_wisebed()
 		}while( size > 0 );
 	}
 }
-
-/*---------------------------------------------------------------------*/
-
-void router_configuration_to_wisebed()
-{
-	unsigned char configbuffer[BUFFER_SIZE];
-	int size = 0;
-
-	//---------IPv6 header---------
-	strncpy( configbuffer, CONFIG_IPV6_HEADER, sizeof(CONFIG_IPV6_HEADER) );
-	size+= sizeof(CONFIG_IPV6_HEADER) -1;
-	
-	strncpy( configbuffer+size, CONFIG_IPV6_SOURCE, sizeof(CONFIG_IPV6_SOURCE) );
-	size+= sizeof(CONFIG_IPV6_SOURCE) -1;
-	
-	strncpy( configbuffer+size, CONFIG_IPV6_DESTINATION, sizeof(CONFIG_IPV6_DESTINATION) );
-	size+= sizeof(CONFIG_IPV6_DESTINATION) -1;
-	
-	//Add host part of the destination address (8bytes)
-	//TODO HACK
-	unsigned char hostID[]= {0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff};
-	
-	int i;
-	for( i = 0; i < 8; i++ )
-		size += sprintf(configbuffer+size, "0x%02X,", hostID[i]);
-	
-	//---------ICMPv6 header---------
-	strncpy( configbuffer+size, CONFIG_ICMPV6_HEADER, sizeof(CONFIG_ICMPV6_HEADER) );
-	size+= sizeof(CONFIG_ICMPV6_HEADER) -1;
-	
-	//Options
-	//---------ABRO---------
-	strncpy( configbuffer+size, CONFIG__ABRO, sizeof(CONFIG__ABRO) );
-	size+= sizeof(CONFIG__ABRO) -1;
-	
-	//Add global address of the border router (16bytes)
-	//Ipv6 string to byte array conversion
-	unsigned char global_address_buffer[sizeof(struct in6_addr)];
-	unsigned char* ipaddr_without_prefix_len = strdup( ipaddr );
-	ipaddr_without_prefix_len[strlen(ipaddr_without_prefix_len)-4] = '\0';
-
-	if (inet_pton(AF_INET6, ipaddr_without_prefix_len, global_address_buffer) != 1)
-	{
-		error(EXIT_FAILURE,0,"IPv6 parsing failed! Exit");
-	}
-	
-	//Set the prefix part
-	
-	for( i = 0; i < 8; i++ )
-		size += sprintf(configbuffer+size, "0x%02X,", global_address_buffer[i]);
-	//Set the hostID part
-	for( i = 0; i < 8; i++ )
-		size += sprintf(configbuffer+size, "0x%02X,", hostID[i]);
-	
-	
-	//---------PIO---------
-	strncpy( configbuffer+size, CONFIG_PIO, sizeof(CONFIG_PIO) );
-	size+= sizeof(CONFIG_PIO) -1;
-	//Add prefix with 0-s at the host part (16bytes)
-	for( i = 0; i < 16; i++ )
-		size += sprintf(configbuffer+size, "0x%02X,", global_address_buffer[i]);
-	
-	
-	//--------6CO---------
-	strncpy( configbuffer+size, CONFIG_6CO, sizeof(CONFIG_6CO) );
-	size+= sizeof(CONFIG_6CO) -1;
-	//Add prefix only (8 bytes)
-	for( i = 0; i < 8; i++ )
-		size += sprintf(configbuffer+size, "0x%02X,", global_address_buffer[i]);
-	
-	//Close the string
-	configbuffer[size-1] = '\0';
-	
-	//TODO SEND TO WISEBED
-	printf("RA: %s\n\n", configbuffer );
-	
-	
-	free(ipaddr_without_prefix_len);
-}
-
-/*---------------------------------------------------------------------*/
 
 /*---------------------------------------------------------------------*/
 
