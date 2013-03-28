@@ -10,7 +10,7 @@ void buffer_to_wisebed( unsigned char* tunbuffer, int size );
 
 
 #define BUFFER_SIZE 1500
-#define SENDING_TO_WISEBED_MAX_SIZE 140
+#define SENDING_TO_WISEBED_MAX_SIZE 145
 
 #define WISEBED_MODE 1
 #define SERIAL_MODE 2

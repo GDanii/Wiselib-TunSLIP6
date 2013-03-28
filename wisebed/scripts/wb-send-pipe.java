@@ -123,14 +123,17 @@
 // 				System.out.println( tmp );
 				pipe_buffer[actual_pos] = (byte)tmp;
 				
-				if( pipe_buffer[actual_pos] == SLIP_END && actual_pos > 1 ) {
+				if( actual_pos == 145 || actual_pos > 1 && pipe_buffer[actual_pos] == SLIP_END ) {
 					
 // 					System.out.println( "send " + actual_pos );
 					
 					//copy the real size
-					byte[] messageToSendBytes = new byte[actual_pos];
-					for( int i = 0; i < actual_pos; i++ )
+					byte[] messageToSendBytes = new byte[actual_pos+1];
+					for( int i = 0; i <= actual_pos; i++ )
+					{
 						messageToSendBytes[i] = pipe_buffer[i];
+// 						System.out.print( Integer.toHexString(messageToSendBytes[i] & 0xFF)+ " " );
+					}
 				
 					// Constructing the Message
 					Message binaryMessage = new Message();
@@ -161,11 +164,8 @@
 	
 					actual_pos = 0;
 				}
-				else{
+				else
 					actual_pos++;
-				}
-
-			
 		}
 	}
 	

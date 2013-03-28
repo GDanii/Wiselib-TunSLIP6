@@ -49,8 +49,10 @@
 						{
 							//Drop the initial 'i' here
 // 							for( int k = 1; k < byte_msg.length; k++ )
-								raf.write( byte_msg, 1, byte_msg.length-1 );
-// 								System.out.write( byte_msg[k]);
+// 								System.out.print( Integer.toHexString(byte_msg[k] & 0xFF)+ " " );
+							
+							raf.write( byte_msg, 1, byte_msg.length-1 );
+// 							System.out.write( byte_msg[k]);
 						}
 // 						System.out.flush();
 					}
