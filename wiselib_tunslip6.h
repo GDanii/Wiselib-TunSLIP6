@@ -5,7 +5,6 @@ int pipe_to_tun( FILE* pipe_fd, int tun_fd );
 int tun_alloc(char *dev);
 void ifconf_tun(const char *tundev, const char *ipaddr);
 void tun_to_buffer();
-unsigned char read_stringhex( FILE* pipe_file );
 void router_configuration_to_buffer();
 void buffer_to_wisebed( unsigned char* tunbuffer, int size );
 

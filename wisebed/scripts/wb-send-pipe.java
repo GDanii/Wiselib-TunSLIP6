@@ -7,7 +7,7 @@
 	String localControllerEndpointURL	= "http://" + InetAddress.getLocalHost().getCanonicalHostName() + ":8089/controller";
 	String sessionManagementEndpointURL	= System.getProperty("testbed.sm.endpointurl");
 	String secretReservationKeys        = System.getProperty("testbed.secretreservationkeys");
-	String messageToSend                = System.getProperty("testbed.message");
+	//String messageToSend                = System.getProperty("testbed.message");
 	String selectedNodeUrns               = System.getProperty("testbed.nodeurns");
 	boolean csv                         = System.getProperty("testbed.listtype") != null && "csv".equals(System.getProperty("testbed.listtype"));
 
@@ -16,12 +16,14 @@
 	Integer protobufPort                = protobufPortString == null ? null : Integer.parseInt(protobufPortString);
 	boolean useProtobuf                 = protobufHost != null && protobufPort != null;
 
-	SessionManagement sessionManagement = WSNServiceHelper.getSessionManagementService(sessionManagementEndpointURL);
+ 	SessionManagement sessionManagement = WSNServiceHelper.getSessionManagementService(sessionManagementEndpointURL);
 
-//--------------------------------------------------------------------------
+ //--------------------------------------------------------------------------
 // Application logic
 //--------------------------------------------------------------------------
-
+	
+	
+	
 	log.debug("Using the following parameters for calling getInstance(): {}, {}",
 			StringUtils.jaxbMarshal(helper.parseSecretReservationKeys(secretReservationKeys)),
 			localControllerEndpointURL
@@ -98,52 +100,73 @@
 		nodeURNs = WiseMLHelper.getNodeUrns(wsn.getNetwork().get(), new String[]{});
 		log.debug("Retrieved the following node URNs: {}", nodeURNs);
 	}
+	
+	byte SLIP_END = 192;
+	
+	File  f_pipe = new File ( "/tmp/wisebed_sending_pipe" );  
+	for(;;){
+		RandomAccessFile raf = new RandomAccessFile(f_pipe, "r");//p.1
+// 		System.out.println( "open" );
+		byte[] pipe_buffer = new byte[1500];
+		int actual_pos = 0;
+		
+		for( ;; ){
+			
+			int tmp;
+			try
+			{
+				tmp = raf.readUnsignedByte();
+			}catch( IOException e ) {
+				break;
+			}
+// 			System.out.println( "read" );
+// 				System.out.println( tmp );
+				pipe_buffer[actual_pos] = (byte)tmp;
+				
+				if( pipe_buffer[actual_pos] == SLIP_END && actual_pos > 1 ) {
+					
+// 					System.out.println( "send " + actual_pos );
+					
+					//copy the real size
+					byte[] messageToSendBytes = new byte[actual_pos];
+					for( int i = 0; i < actual_pos; i++ )
+						messageToSendBytes[i] = pipe_buffer[i];
+				
+					// Constructing the Message
+					Message binaryMessage = new Message();
+					binaryMessage.setBinaryData(messageToSendBytes);
+					
+					GregorianCalendar c = new GregorianCalendar();
+					c.setTimeInMillis(System.currentTimeMillis());
 
-	// Constructing UART Message from Input String (Delimited by ",")
-	// Supported Prefixes are "0x" and "0b", otherwise Base_10 (DEZ) is assumed	
-	String[] splitMessage = messageToSend.split(",");
-	byte[] messageToSendBytes = new byte[splitMessage.length];
-	String messageForOutputInLog = "";
-	for (int i=0;i<splitMessage.length;i++) {
-		int type = 10;
-		if (splitMessage[i].startsWith("0x")) {
-			type = 16;
-			splitMessage[i]=splitMessage[i].replace("0x","");
-		} else if (splitMessage[i].startsWith("0b")) {
-			type = 2;
-			splitMessage[i]=splitMessage[i].replace("0b","");
+					binaryMessage.setTimestamp(DatatypeFactory.newInstance().newXMLGregorianCalendar(c));
+					binaryMessage.setSourceNodeId("urn:wisebed:uzl1:0xFFFF");
+					
+					Future sendFuture = wsn.send(nodeURNs, binaryMessage, 10, TimeUnit.SECONDS);
+					try {
+
+						JobResult sendJobResult = sendFuture.get();
+						sendJobResult.printResults(System.out, csv);
+// 						System.exit(sendJobResult.getSuccessPercent() < 100 ? 1 : 0);
+
+// 						log.debug("Shutting down...");
+// 						System.exit(0);
+
+					} catch (ExecutionException e) {
+						if (e.getCause() instanceof TimeoutException) {
+							log.info("Call timed out. Exiting...");
+						}
+						System.exit(1);
+					}
+	
+					actual_pos = 0;
+				}
+				else{
+					actual_pos++;
+				}
+
+			
 		}
-		BigInteger b = new BigInteger(splitMessage[i], type);
-		messageToSendBytes[i] = (byte) b.intValue() ;
-		messageForOutputInLog = messageForOutputInLog + b.intValue() +" ";
 	}
 	
-	log.debug("Sending Message [ "+messageForOutputInLog+"] to nodes...");
-	
-	// Constructing the Message
-	Message binaryMessage = new Message();
-	binaryMessage.setBinaryData(messageToSendBytes);
-	
-	GregorianCalendar c = new GregorianCalendar();
-	c.setTimeInMillis(System.currentTimeMillis());
-
-	binaryMessage.setTimestamp(DatatypeFactory.newInstance().newXMLGregorianCalendar(c));
-	binaryMessage.setSourceNodeId("urn:wisebed:uzl1:0xFFFF");
-	
-	Future sendFuture = wsn.send(nodeURNs, binaryMessage, 10, TimeUnit.SECONDS);
-	try {
-
-		JobResult sendJobResult = sendFuture.get();
-		sendJobResult.printResults(System.out, csv);
-		System.exit(sendJobResult.getSuccessPercent() < 100 ? 1 : 0);
-
-		log.debug("Shutting down...");
-		System.exit(0);
-
-	} catch (ExecutionException e) {
-		if (e.getCause() instanceof TimeoutException) {
-			log.info("Call timed out. Exiting...");
-		}
-		System.exit(1);
-	}
-
+	raf.close();

@@ -32,13 +32,18 @@ int ssystem(const char *fmt, ...)
 }
 
 //Working mode of the tunneling application
-int working_mode = 0;
+int working_mode = WISEBED_MODE;
 
 //Wisebed listening pipe filedescriptor
 FILE* wisebed_listening_file = NULL;
 char * wisebed_listening_pipe = "/tmp/wisebed_listening_pipe";
 
-//sudo ./a.out -W -Rurn:wisebed:uzl1:,9E3FD7EC778C38847F229707C300D347 -Burn:wisebed:uzl1:0x2100
+//Wisebed sending pipe filedescriptor
+FILE* wisebed_sending_file = NULL;
+char * wisebed_sending_pipe = "/tmp/wisebed_sending_pipe";
+
+//sudo ./a.out -W -Rurn:wisebed:uzl1:,592DBD4F7AB3F9D1A62B06BD5C1EFEDB -Burn:wisebed:uzl1:0x2140
+
 //Global WISEBED parameters
 char* ipaddr = NULL;
 char* reservation_key = NULL;
@@ -46,8 +51,8 @@ char* config_path = NULL;
 char* list_type = "line";
 char* border_router_node = NULL;
 char* exp_path = NULL;
-char* listen_java_location = "wisebed/scripts/wb-listen.java";
-char* send_java_location = "wisebed/scripts/wb-listen.java";
+char* listen_java_location = "wisebed/scripts/wb-listen-pipe.java";
+char* send_java_location = "wisebed/scripts/wb-send-pipe.java";
 
 //IPv6 tunnel filedescriptor
 int tunnel_fd = 0;
@@ -57,223 +62,217 @@ char tundev[IFNAMSIZ];
 
 int main(int argc, char **argv)
 {
-    atexit(cleanup);
-    signal(SIGHUP, sigcleanup);
-    signal(SIGTERM, sigcleanup);
-    signal(SIGINT, sigcleanup);
-    
-    
-    char* prog = argv[0];
-    int c;
-    while((c = getopt(argc, argv, "W::R::B::C::E::t::")) != -1) {
-        switch(c) {
-        case 'W':
-        working_mode = WISEBED_MODE;
-        break;
+	atexit(cleanup);
+	signal(SIGHUP, sigcleanup);
+	signal(SIGTERM, sigcleanup);
+	signal(SIGINT, sigcleanup);
+	
+	
+	char* prog = argv[0];
+	int c;
+	while((c = getopt(argc, argv, "W::R::B::C::E::t::")) != -1) {
+		switch(c) {
+		case 'W':
+		working_mode = WISEBED_MODE;
+		break;
 
-        case 'R':
-        reservation_key = optarg;
-        break;
-    
-        case 'B':
-        border_router_node = optarg;
-        break;
-        
-        case 'C':        
-        config_path = optarg;    
-        break;
-        
-        case 'E':
-        exp_path = optarg;
-        break;
+		case 'R':
+		reservation_key = optarg;
+		break;
+	
+		case 'B':
+		border_router_node = optarg;
+		break;
+		
+		case 'C':        
+		config_path = optarg;    
+		break;
+		
+		case 'E':
+		exp_path = optarg;
+		break;
 
-        case 't':
-        if(strncmp("/dev/", optarg, 5) == 0) {
-            strncpy(tundev, optarg + 5, sizeof(tundev));
-        } else {
-            strncpy(tundev, optarg, sizeof(tundev));
-        }
-        break;
+		case 't':
+		if(strncmp("/dev/", optarg, 5) == 0) {
+		strncpy(tundev, optarg + 5, sizeof(tundev));
+		} else {
+		strncpy(tundev, optarg, sizeof(tundev));
+		}
+		break;
 
-        /*case 'v':
-        verbose = 2;
-        if (optarg) verbose = atoi(optarg);
-        break;*/
-    
-        case '?':
-        case 'h':
-        default:
-            fprintf(stderr,"usage: sudo %s [options] ipvaddress\n", prog);
-            fprintf(stderr,"example: ... aaaa::1/64\n");
-            fprintf(stderr,"Options are:\n");
-            fprintf(stderr," -W                     Enable usage with WISEBED\n");
-            fprintf(stderr," -R  reservation_code   WISEBED: Reservation code\n");
-            fprintf(stderr," -B  border_router_URN  WISEBED: URN of the border router node (eg:urn:wisebed:uzl1:0x2100)\n");
-            fprintf(stderr," -C  config_file        WISEBED: Place of the config file (default: wisebed/live.properties)\n");
-            fprintf(stderr," -E  path               WISEBED: Experimentation Scripts directory (default: wisebed/)\n");
-            fprintf(stderr," -t  tundev             Name of the IPv6 interface (default tun1)\n");
-            /*fprintf(stderr," -v[level]      Verbosity level\n");
-            fprintf(stderr,"    -v0         No messages\n");
-            fprintf(stderr,"    -v1         Encapsulated SLIP debug messages (default)\n");
-            fprintf(stderr,"    -v2         Printable strings after they are received\n");
-            fprintf(stderr,"    -v3         Printable strings and SLIP packet notifications\n");
-            fprintf(stderr,"    -v4         All printable characters as they are received\n");
-            fprintf(stderr,"    -v5         All SLIP packets in hex\n");*/
-            exit(1);
-            break;
-        }
-    }
-    argc -= (optind - 1);
-    argv += (optind - 1);
-    
-    //Parameter check
-    if(working_mode == 0)
-        error(EXIT_FAILURE,0,"No working mode selected!");
-    if(working_mode == WISEBED_MODE)
-    {
-        if( reservation_key == NULL )
-            error(EXIT_FAILURE,0,"No reservation key!");
-        
-        if( border_router_node == NULL )
-            error(EXIT_FAILURE,0,"No border router!");
-    }
-    if(argv[1] == NULL)
-         error(EXIT_FAILURE,0,"No IPv6 address!");
-    
-    //copy the IPv6 address
-    ipaddr = argv[1];
-    
-    //Default values
-    if( config_path == NULL )
-    {
-        config_path = (char*) malloc( 24 );
-        strcpy(config_path, "wisebed/live.properties");
-    }
-    
-    if( exp_path == NULL )
-    {
-        exp_path = malloc( 9 );
-        strcpy(exp_path, "wisebed/");
-    }
-    
-    if( tundev == NULL )
-    {
-        strcpy(tundev, "tun1");
-    }
-    
-//     printf("things: %s %s %s %s %s", reservation_key, border_router_node, config_path, exp_path, ipaddr );
+		/*case 'v':
+		verbose = 2;
+		if (optarg) verbose = atoi(optarg);
+		break;*/
+	
+		case '?':
+		case 'h':
+		default:
+		fprintf(stderr,"usage: sudo %s [options] ipvaddress\n", prog);
+		fprintf(stderr,"example: ... aaaa::1/64\n");
+		fprintf(stderr,"Options are:\n");
+		fprintf(stderr," -W                     Enable usage with WISEBED\n");
+		fprintf(stderr," -R  reservation_code   WISEBED: Reservation code\n");
+		fprintf(stderr," -B  border_router_URN  WISEBED: URN of the border router node (eg:urn:wisebed:uzl1:0x2100)\n");
+		fprintf(stderr," -C  config_file        WISEBED: Place of the config file (default: wisebed/live.properties)\n");
+		fprintf(stderr," -E  path               WISEBED: Experimentation Scripts directory (default: wisebed/)\n");
+		fprintf(stderr," -t  tundev             Name of the IPv6 interface (default tun0)\n");
+		/*fprintf(stderr," -v[level]      Verbosity level\n");
+		fprintf(stderr,"    -v0         No messages\n");
+		fprintf(stderr,"    -v1         Encapsulated SLIP debug messages (default)\n");
+		fprintf(stderr,"    -v2         Printable strings after they are received\n");
+		fprintf(stderr,"    -v3         Printable strings and SLIP packet notifications\n");
+		fprintf(stderr,"    -v4         All printable characters as they are received\n");
+		fprintf(stderr,"    -v5         All SLIP packets in hex\n");*/
+		exit(1);
+		break;
+		}
+	}
+	argc -= (optind - 1);
+	argv += (optind - 1);
+	
+	//Parameter check
+	if(working_mode == 0)
+		error(EXIT_FAILURE,0,"No working mode selected!");
+	if(working_mode == WISEBED_MODE)
+	{
+		if( reservation_key == NULL )
+		error(EXIT_FAILURE,0,"No reservation key!");
+		
+		if( border_router_node == NULL )
+		error(EXIT_FAILURE,0,"No border router!");
+	}
+	else
+		error(EXIT_FAILURE,0,"Only the WISEBED mode is supported at the moment");
+	
+	if(argv[1] == NULL)
+		error(EXIT_FAILURE,0,"No IPv6 address!");
+	
+	//copy the IPv6 address
+	ipaddr = argv[1];
+	
+	//Default values
+	if( config_path == NULL )
+	{
+		config_path = (char*) malloc( 24 );
+		strcpy(config_path, "wisebed/live.properties");
+	}
+	
+	if( exp_path == NULL )
+	{
+		exp_path = malloc( 9 );
+		strcpy(exp_path, "wisebed/");
+	}
+	
+	if( tundev == NULL )
+	{
+		strcpy(tundev, "tun0");
+	}
+	
+	//     printf("things: %s %s %s %s %s", reservation_key, border_router_node, config_path, exp_path, ipaddr );
 
-    //exit(0);
-    //For IO handling
-    fd_set rset, wset;
-    //struct timeval timeout;
-    int wisebed_listening_fd = 0;
-  
-    printf( "WISEBED Tunslip6 program\n" );
-  
-    //------- Create and open WISEBED pipe --------
-    
-    //Create the listening pipe WISEBED java --> pipe
-    if( mkfifo(wisebed_listening_pipe, 0666) < 0 )
-        error(EXIT_FAILURE, 1, "Pipe creation error");
-        
-    //Open the pipe
-    wisebed_listening_fd = open( wisebed_listening_pipe, O_RDONLY | O_NONBLOCK );        
-    if( wisebed_listening_fd < 1 )
-        error(EXIT_FAILURE, 1, "Pipe opening error");
-    
-    //Convert filedescriptor to FILE because of fread
-    wisebed_listening_file = fdopen(wisebed_listening_fd, "r");
-    if( wisebed_listening_file == NULL )
-        error(EXIT_FAILURE, 1, "Pipe opening error");
-    
-    printf( "WISEBED pipe opened\n" );
-    
-    
-    //HACK: open a new terminal and run the command there, because if I send it to background in the same terminal, the java utilizes the CPU 100%
-    ssystem( "gnome-terminal -x sh -c 'java -Dtestbed.secretreservationkeys=%s -Dtestbed.listtype=%s -jar wisebed/lib/tr.scripting-client-0.8-onejar.jar -p %s -f %s > %s' &", reservation_key, list_type, config_path, listen_java_location, wisebed_listening_pipe );
-    
-    //Wait 2 seconds
-    sleep(2);
-    
-    //------- Create and open TUN interface --------
-        
-    //Create and open the tunnel file
-    tunnel_fd = tun_alloc( tundev );
-    if(tunnel_fd == -1) 
-            error(EXIT_FAILURE, 1, "Tunnel opening error");
-    
-    printf( "Opened tunnel device ''/dev/%s''\n", tundev );
-    
-    //Configure the interface
-    ifconf_tun( tundev, ipaddr );
-    
-    //Wait 2 seconds
-    sleep(2);
-    
-    router_configuration_to_buffer();
-    
-  
-    //Set the timeout for the select function
-    //timeout.tv_sec = 1;
-    //timeout.tv_usec = 0;
-    
-    //------- Loop I/O handling with FD_* macros --------
-    while(1)
-    {
-        //This is for the select command
-        int maxfd = 0;
-        
-        //Reset the sets
-        FD_ZERO(&rset);
-        
-        //Set the rset for the listening pipe
-        FD_SET(wisebed_listening_fd, &rset);
-        if(wisebed_listening_fd > maxfd) maxfd = wisebed_listening_fd;
-        //Set the rset for the tunnel
-        FD_SET(tunnel_fd, &rset);
-        if(tunnel_fd > maxfd) maxfd = tunnel_fd;
-// 	printf("Wait\n");
-        //Wait here, until one of the files are ready
-        int ret = select(maxfd + 1, &rset, NULL, NULL, NULL);//&timeout);
-        
-        if( ret < 0 )
-            error(EXIT_FAILURE, 1, "I/O handling (select) failed");
-        //Timeout
-        //else if (ret == 0 )
-        //{
-            //Check whether we are in the middle of a receiving process, and delete it
-        //}
-        else// if(ret > 0) 
-        {
-            
-            //Test wisebed listening pipe
-            if(FD_ISSET(wisebed_listening_fd, &rset)) 
-            {
-// 		    printf("Read from PIPE\n");
-                //Read from the pipe, write to the tun interface
-                pipe_to_tun( wisebed_listening_file, tunnel_fd );
-            }
-            
-            //Tunnel
-            if(FD_ISSET(tunnel_fd, &rset)) 
-            {
-// 		    printf("Read from TUN\n");
-                //Read from the ipv6 tunnel and call the java send
-                tun_to_buffer();
-            }
-        }
-    }
+	//For IO handling
+	fd_set rset, wset;
+	//struct timeval timeout;
+	int wisebed_listening_fd = 0;
+	
+	printf( "WISEBED Tunslip6 program\n" );
+	
+	//---------------------------- Create and open WISEBED pipe -----------------------------
+	
+	//****** LISTEN ********
+	//Create the listening pipe WISEBED java --> pipe
+	if( mkfifo(wisebed_listening_pipe, 0666) < 0 )
+		error(EXIT_FAILURE, 1, "L Pipe creation error (/tmp/wisebed_listening_pipe)");
+		
+	//Open the pipe
+	wisebed_listening_fd = open( wisebed_listening_pipe, O_RDONLY | O_NONBLOCK );        
+	if( wisebed_listening_fd < 1 )
+		error(EXIT_FAILURE, 1, "L Pipe opening error");
+	
+	//Convert filedescriptor to FILE because of fread
+	wisebed_listening_file = fdopen(wisebed_listening_fd, "r");
+	if( wisebed_listening_file == NULL )
+		error(EXIT_FAILURE, 1, "L Pipe opening error");
+	
+	//******* SEND **********
+	//Create the sending pipe
+	if( mkfifo(wisebed_sending_pipe, 0666) < 0 )
+		error(EXIT_FAILURE, 1, "S Pipe creation error (/tmp/wisebed_sending_pipe)");
+	
+	//Start the Wisebed send script
+	ssystem( "java -Dtestbed.secretreservationkeys=%s -Dtestbed.listtype=%s -Dtestbed.nodeurns=%s -jar wisebed/lib/tr.scripting-client-0.8-onejar.jar -p %s -f %s &", reservation_key, list_type, border_router_node, config_path, send_java_location );
+	
+	//Wait 3 seconds to establish the connection
+	sleep(3);    
+	
+	ssystem( "java -Dtestbed.secretreservationkeys=%s -Dtestbed.listtype=%s -Dtestbed.nodeurns=%s -jar wisebed/lib/tr.scripting-client-0.8-onejar.jar -p %s -f %s &", reservation_key, list_type, border_router_node, config_path, listen_java_location );
+	
+	//Wait 3 seconds to establish the connection
+	sleep(3);
+
+	//---------------------------- Create and open TUN interface -----------------------------
+		
+	//Create and open the tunnel file
+	tunnel_fd = tun_alloc( tundev );
+	if(tunnel_fd == -1) 
+		error(EXIT_FAILURE, 1, "Tunnel opening error");
+	
+	printf( "Opened tunnel device ''/dev/%s''\n", tundev );
+	
+	//Configure the interface
+	ifconf_tun( tundev, ipaddr );
+	
+	//Wait 1 second before RA
+	sleep(1);
+	
+	router_configuration_to_buffer();
+	
+	//---------------------------- Loop I/O handling with FD_* macros -----------------------------
+	while(1)
+	{
+		//This is for the select command
+		int maxfd = 0;
+		
+		//Reset the sets
+		FD_ZERO(&rset);
+		
+		//Set the rset for the listening pipe
+		FD_SET(wisebed_listening_fd, &rset);
+		if(wisebed_listening_fd > maxfd) maxfd = wisebed_listening_fd;
+		//Set the rset for the tunnel
+		FD_SET(tunnel_fd, &rset);
+		if(tunnel_fd > maxfd) maxfd = tunnel_fd;
+		
+		//Wait here, until one of the files are ready
+		int ret = select(maxfd + 1, &rset, NULL, NULL, NULL);
+		
+		if( ret < 1 )
+		error(EXIT_FAILURE, 1, "I/O handling (select) failed");
+		else
+		{
+		
+			//Test wisebed listening pipe
+			if(FD_ISSET(wisebed_listening_fd, &rset)) 
+			{
+				//printf("Read from PIPE\n");
+				//Read from the pipe, write to the tun interface
+				pipe_to_tun( wisebed_listening_file, tunnel_fd );
+			}
+			
+			//Tunnel
+			if(FD_ISSET(tunnel_fd, &rset)) 
+			{
+				//printf("Read from TUN\n");
+				//Read from the ipv6 tunnel and call the java send
+				tun_to_buffer();
+			}
+		}
+	}
 }
 
 /*---------------------------------------------------------------------*/
 
-
-//Input: wisebedURN|sizeofmessage|message
-
-#define READ_PHASE_URN 0
-#define READ_PHASE_SIZE 1
-#define READ_PHASE_HEX 2
 
 int read_from_pipe_phase = 0;
 unsigned char pipe_buffer[BUFFER_SIZE];
@@ -281,21 +280,6 @@ int buffer_actual_position = 0;
 
 int pipe_to_tun( FILE* pipe_file, int tunnel_fd )
 {
-	//used_line indicates that the actual output line is from the selected border_router_node
-	int used_line = 1;
-	
-	unsigned char URNbuffer[50];
-    
-	//read bytes for the actual message
-	int read_bytes_from_hex_part = 0;
-	
-	//Size of the hex part (urn|SIZE|hex)
-	int size_of_the_hex_part = -1;
-	
-	//Size of the URN for buffer storage
-	int urn_size = 0;
-	
-// 	printf( "From pipe: Called mode: %d\n", used_line, read_from_pipe_phase);
 	while(1)
 	{
 		unsigned char c;
@@ -304,193 +288,54 @@ int pipe_to_tun( FILE* pipe_file, int tunnel_fd )
 			clearerr(pipe_file);
 			break;
 		}
-		
-// 		printf( "Read: %i Max: %i Phase: %i \n", read_bytes_from_hex_part, size_of_the_hex_part, read_from_pipe_phase);
-		
-		//Process PHASE shifts, delimited with |
-		if( read_from_pipe_phase != READ_PHASE_HEX && c == '|' )
+// 		printf( " %x", c);
+
+		//Get the END and ESC escape characters
+		if( c == SLIP_ESC )
 		{
-			//Test the URN
-			if( read_from_pipe_phase == READ_PHASE_URN )
+			//Escaped byte --> Read one more
+			if( fread(&c, 1, 1, pipe_file ) == 0 )
 			{
-				//Mark the actual sequence
-				if( 0 == strncmp( border_router_node, URNbuffer, sizeof(border_router_node) ) )
-					used_line = 1;
+				error(EXIT_FAILURE, 1, "Pipe to TUN SLIP_ESC error");
+			}
+			
+			//Escaped ESC
+			if( c == SLIP_ESC_ESC )
+				pipe_buffer[buffer_actual_position++] = SLIP_ESC;
+			if( c == SLIP_ESC_END )
+				pipe_buffer[buffer_actual_position++] = SLIP_END;
+		}
+		else if( c == SLIP_END )
+		{
+			//If this is the initial END (buffer_actual_position == 0) then just continue
+			if( buffer_actual_position > 0 )
+			{
+				//Simple IPv6 tests
+				int ipv6_payload_size = pipe_buffer[4] << 8 | (pipe_buffer[5]);
+				if( ((pipe_buffer[0] >> 4) == 6) && ((ipv6_payload_size + 40) == buffer_actual_position) )
+				{
+					//Write the buffer to the tunnel interface
+					if(write(tunnel_fd, pipe_buffer, buffer_actual_position) != buffer_actual_position) 
+					{
+						error(EXIT_FAILURE, 1, "From pipe: Error when writing to tun");
+					}
+					printf( "From pipe: IPv6 packet has been writen to tun (size %i)\n", buffer_actual_position);
+				}
 				else
-					used_line = 0;
+				{
+					printf( "From pipe: Non IPv6 packet, dropped\n");
+				}
 				
-// 				printf( "From pipe: NODE (%s)\n", URNbuffer);
+				//Reset the storage
+				buffer_actual_position = 0;
 			}
-// 			else
-// 				printf( "From pipe: HEX size (%d)\n", size_of_the_hex_part);
-			read_from_pipe_phase++;
-			continue;
 		}
-		
-		//----- PROCESS
-		
-		//Store the next char from the URN
-		if( read_from_pipe_phase == READ_PHASE_URN )
+		//Only store the byte
+		else
 		{
-			URNbuffer[urn_size++] = c;
-		}
-		else if( read_from_pipe_phase == READ_PHASE_SIZE )
-		{
-			if( size_of_the_hex_part == -1 )
-				size_of_the_hex_part = 0;
-			else
-				size_of_the_hex_part *= 10;
-			//to ASCII
-			size_of_the_hex_part += c - 48;
-		}
-		else //READ_PHASE_HEX
-		{
-			unsigned char tmp = read_stringhex( pipe_file );
-			read_bytes_from_hex_part++;
-			
-// 			printf("READ HEX: %x\n", tmp);
-			//Process only the used lines, and only read out the non used ones from the pipe
-			//if( used_line == 0 )
-			//	read_bytes_from_hex_part++;
-			//else
-			if( used_line == 1 )
-			{
-				if( read_bytes_from_hex_part - 1 == 0 )
-				{
-					
-					//First byte and it is 0x69 --> this is a UART message
-					if( tmp == 0x69 )
-						continue;
-					//First byte with anything else --> this is Debug message, drop the line
-					else
-						used_line = 0;
-				}
-				//Non first byte --> only reached if it is a byte from a UART message
-				else
-				{
-					//Get the END and ESC escape characters
-					if( tmp == SLIP_ESC )
-					{
-						//Escaped byte --> Read one more
-						tmp = read_stringhex( pipe_file );
-						read_bytes_from_hex_part++;
-						
-						//Escaped ESC
-						if( tmp == SLIP_ESC_ESC )
-							pipe_buffer[buffer_actual_position++] = SLIP_ESC;
-						if( tmp == SLIP_ESC_END )
-							pipe_buffer[buffer_actual_position++] = SLIP_END;
-					}
-					//End of the IP packet, send it to the tunnel
-					else if( tmp == SLIP_END )
-					{
-						//If this is the initial END (buffer_actual_position == 0) then just continue
-						if( buffer_actual_position > 0 )
-						{
-	// 						//IPv6 version check
-	// 						if( (pipe_buffer[0] >> 4) == 6 )
-	// 						{
-	// 							//Get the IPv6 size from the header
-	// 							int ipv6_payload_size = pipe_buffer[4] << 8 | (pipe_buffer[5]);
-	// 							//Check the received bytes
-	// 							if( (ipv6_payload_size + 40) == actual_read_bytes )
-	// 							{
-								
-									
-								//Write the buffer to the tunnel interface
-								if(write(tunnel_fd, pipe_buffer, buffer_actual_position) != buffer_actual_position) 
-								{
-									error(EXIT_FAILURE, 1, "From pipe: Error when writing to tun");
-								}
-								printf( "From pipe: IPv6 packet has been writen to tun (size %i)\n", buffer_actual_position);
-								
-// 								int b = 0;
-// 								for(b = 0; b < buffer_actual_position; b++)
-// 									printf("%x ", pipe_buffer[b]);
-// 								printf("\n");
-								
-								//Reset the storage
-								buffer_actual_position = 0;
-	// 							}
-	// 							else
-	// 							{
-	// 								printf( "From pipe: IPv6 packet size error (expected: %d, captured: %d), dropped\n", ipv6_payload_size+40, actual_read_bytes );
-	// 							}
-	// 						}
-	// 						else
-	// 						{
-	// 							printf( "From pipe: Non IPv6 packet, dropped\n");
-	// 						}
-						}
-					}
-					//Only store the byte
-					else
-					{
-						pipe_buffer[buffer_actual_position++] = tmp;
-					}
-				}
-			}
-			
-			
-		}
-		
-		//End of the message, reset the phase to READ_PHASE_URN
-		if( read_bytes_from_hex_part == size_of_the_hex_part )
-		{
-// 			int b = 0;
-// 			for(b = 0; b < buffer_actual_position; b++)
-// 				printf("%x ", pipe_buffer[b]);
-// 			printf("\n");
-// 								
-// 			printf( "From pipe: End of message\n");
-							
-			read_from_pipe_phase = 0;
-			read_bytes_from_hex_part = 0;
-			size_of_the_hex_part = -1;
-			urn_size = 0;
-			used_line = 1;
+			pipe_buffer[buffer_actual_position++] = c;
 		}
 	}
-}
-
-unsigned char read_stringhex( FILE* pipe_file )
-{
-    unsigned char c;
-    //Format for each byte from exp. scripts: "0xXX_" or "0xX_" but the 0 has been read by the caller loop
-    //read 'x' from: "0xXX_"
-    fread(&c, 1, 1, pipe_file );
-    
-    unsigned char first_part;
-    //Read first_part (X) from "0xXX_"
-    fread(&first_part, 1, 1, pipe_file );
-    
-    //ASCII conversion
-    if( first_part >= 'a' )
-        first_part -= 87;
-    else
-        first_part -= 48;
-    
-    //Read next from "0xXX_"
-    fread(&c, 1, 1, pipe_file );
-
-    //It was >=16 then this character is the lower part
-    if( c != ' ' )
-    {
-        first_part *= 16;
-        
-        //ASCII conversion
-        if( c >= 'a' )
-            c -= 87;
-        else
-            c -= 48;
-        
-        first_part += c;
-        
-        //read and drop the space
-        fread(&c, 1, 1, pipe_file );
-    }
-    
-    return first_part;
 }
 
 /*---------------------------------------------------------------------*/
@@ -503,7 +348,8 @@ void router_configuration_to_buffer()
 	
 	//---------------Add the hostID part to the padded places
 	//TODO HACK
-	unsigned char hostID[]= {0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff};
+	//unsigned char hostID[]= {0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff};
+	unsigned char hostID[]= {0x02,0x00,0x0,0x0,0x0,0x0,0x21,0x40};
 	
 	//IPv6 Target address hostID 34 - 41 and ABRO 74 - 81
 	int i;
@@ -573,16 +419,16 @@ void buffer_to_wisebed( unsigned char* tunbuffer, int size )
 			
 			
 			//Parse into a tunbuffer
-			unsigned char buf_str[10*actual_sending_size];
-			unsigned char* buf_ptr = buf_str;
+			unsigned char buf_str[actual_sending_size];
+			int buffer_actual_position = 0;
 			
 			//Initial 0x0A byte which is needed for the WISEBED communication
-			buf_ptr += sprintf(buf_ptr, "0x%02X,", SLIP_SEND_WISEBED_INITIAL);
+			buf_str[buffer_actual_position++] = SLIP_SEND_WISEBED_INITIAL;
 			
 			//Initial END for the IP packet
 			if( first_fragment == 1 )
 			{
-				buf_ptr += sprintf(buf_ptr, "0x%02X,", SLIP_END);
+				buf_str[buffer_actual_position++] = SLIP_END;
 				first_fragment = 0;
 				//Reduce the max bytes to prevent longer messages than expected if it is needed
 				if( actual_sending_size == maximum_sendable_size )
@@ -598,8 +444,8 @@ void buffer_to_wisebed( unsigned char* tunbuffer, int size )
 				//Escape the ESC and END characters
 				if( tunbuffer[i+sending_shift] == SLIP_END )
 				{
-					buf_ptr += sprintf(buf_ptr, "0x%02X,", SLIP_ESC);
-					buf_ptr += sprintf(buf_ptr, "0x%02X,", SLIP_ESC_END);
+					buf_str[buffer_actual_position++] = SLIP_ESC;
+					buf_str[buffer_actual_position++] = SLIP_ESC_END;
 					//Reduce the max bytes to prevent longer messages than expected if it is needed
 					//If this was the last byte in the loop, then the message will be longer...
 					//but do not loose a byte from the IP packet
@@ -611,8 +457,8 @@ void buffer_to_wisebed( unsigned char* tunbuffer, int size )
 				}
 				else if( tunbuffer[i+sending_shift] == SLIP_ESC )
 				{
-					buf_ptr += sprintf(buf_ptr, "0x%02X,", SLIP_ESC);
-					buf_ptr += sprintf(buf_ptr, "0x%02X,", SLIP_ESC_ESC);
+					buf_str[buffer_actual_position++] = SLIP_ESC;
+					buf_str[buffer_actual_position++] = SLIP_ESC_ESC;
 					//Reduce the max bytes to prevent longer messages than expected if it is needed
 					//If this was the last byte in the loop, then the message will be longer...
 					//but do not loose a byte from the IP packet
@@ -623,7 +469,7 @@ void buffer_to_wisebed( unsigned char* tunbuffer, int size )
 					}
 				}
 				else
-					buf_ptr += sprintf(buf_ptr, "0x%02X,", tunbuffer[i+sending_shift]);
+					buf_str[buffer_actual_position++] = tunbuffer[i+sending_shift];
 			}
 			//add sent bytes
 			sending_shift += actual_sending_size;
@@ -633,19 +479,30 @@ void buffer_to_wisebed( unsigned char* tunbuffer, int size )
 			//Add the END to the end of the IP packet
 			if( size == 0 )
 			{
-				buf_ptr += sprintf(buf_ptr, "0x%02X,", SLIP_END);
+				buf_str[buffer_actual_position++] = SLIP_END;
 				first_fragment = 0;
 			}
 			
-			*(buf_ptr - 1) = '\0';
-			
 			//Call the java sending
-			ssystem( "java -Dtestbed.secretreservationkeys=%s -Dtestbed.message=%s -Dtestbed.listtype=%s -Dtestbed.nodeurns=%s -jar wisebed/lib/tr.scripting-client-0.8-onejar.jar -p %s -f wisebed/scripts/wb-send.java", reservation_key, buf_str, list_type, border_router_node, config_path );
-			//printf( "from TUN: %s size %i\n", buf_str, size );
+			printf( "To WISEBED size %i\n", buffer_actual_position );
 			
+			//Open the pipe
+			int wisebed_sending_fd = open( wisebed_sending_pipe, O_RDWR | O_NONBLOCK );        
+			if( wisebed_sending_fd < 1 )
+				error(EXIT_FAILURE, 1, "S Pipe opening error");
 			
+			//Convert filedescriptor to FILE because of fread
+			wisebed_sending_file = fdopen(wisebed_sending_fd, "w");
+			if( wisebed_sending_file == NULL )
+				error(EXIT_FAILURE, 1, "S Pipe opening error");
 			
-
+			if( fwrite(buf_str, 1, buffer_actual_position, wisebed_sending_file ) == 0 )
+			{
+				error(EXIT_FAILURE, 1, "To WISEBED: Error when writing to pipe");
+			}
+			
+			fclose( wisebed_sending_file );
+			close(wisebed_sending_fd);
 		}while( size > 0 );
 	}
 }
@@ -654,37 +511,37 @@ void buffer_to_wisebed( unsigned char* tunbuffer, int size )
 
 int tun_alloc(char *dev)
 {
-    struct ifreq ifr;
-    int fd, err;
+	struct ifreq ifr;
+	int fd, err;
 
-    /* open the clone device */
-    if( (fd = open("/dev/net/tun", O_RDWR)) < 0 ) {
-        return -1;
-    }
-    
-    /* preparation of the struct ifr, of type "struct ifreq" */
-    memset(&ifr, 0, sizeof(ifr));
+	/* open the clone device */
+	if( (fd = open("/dev/net/tun", O_RDWR)) < 0 ) {
+		return -1;
+	}
+	
+	/* preparation of the struct ifr, of type "struct ifreq" */
+	memset(&ifr, 0, sizeof(ifr));
 
-    /* Flags: IFF_TUN   - TUN device (no Ethernet headers)
-    *        IFF_NO_PI - Do not provide packet information
-    */
-    ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
-    
-    //Device name specified copy it
-    if (*dev)
-        strncpy(ifr.ifr_name, dev, IFNAMSIZ);
+	/* Flags: IFF_TUN   - TUN device (no Ethernet headers)
+	*        IFF_NO_PI - Do not provide packet information
+	*/
+	ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
+	
+	//Device name specified copy it
+	if (*dev)
+		strncpy(ifr.ifr_name, dev, IFNAMSIZ);
 
-    /* try to create the device */
-    if((err = ioctl(fd, TUNSETIFF, (void *) &ifr)) < 0 ) {
-        close(fd);
-        return err;
-    }
-    
-    /* if the operation was successful, write back the name of the
-    * interface to the variable "dev", so the caller can know it */
-    strcpy(dev, ifr.ifr_name);
-    
-    return fd;
+	/* try to create the device */
+	if((err = ioctl(fd, TUNSETIFF, (void *) &ifr)) < 0 ) {
+		close(fd);
+		return err;
+	}
+	
+	/* if the operation was successful, write back the name of the
+	* interface to the variable "dev", so the caller can know it */
+	strcpy(dev, ifr.ifr_name);
+	
+	return fd;
 
 }
 
@@ -692,57 +549,56 @@ int tun_alloc(char *dev)
 
 void ifconf_tun(const char *tundev, const char *ipaddr)
 {
+	ssystem("ifconfig %s inet `hostname` up", tundev);
+	ssystem("ifconfig %s add %s", tundev, ipaddr);
 
-    ssystem("ifconfig %s inet `hostname` up", tundev);
-    ssystem("ifconfig %s add %s", tundev, ipaddr);
+	/* radvd needs a link local address for routing */
+	// #if 0
+	/* fe80::1/64 is good enough */
+	ssystem("ifconfig %s add fe80::200:0:0:1/64", tundev);
+	// #elif 1
+	// /* Generate a link local address a la sixxs/aiccu */
+	// /* First a full parse, stripping off the prefix length */
+	//   {
+	//     char lladdr[40];
+	//     char c, *ptr=(char *)ipaddr;
+	//     uint16_t digit,ai,a[8],cc,scc,i;
+	//     for(ai=0; ai<8; ai++) {
+	//       a[ai]=0;
+	//     }
+	//     ai=0;
+	//     cc=scc=0;
+	//     while(c=*ptr++) {
+	//       if(c=='/') break;
+	//       if(c==':') {
+	//         if(cc)
+	//           scc = ai;
+	//         cc = 1;
+	//         if(++ai>7) break;
+	//       } else {
+	//         cc=0;
+	//         digit = c-'0';
+	//         if (digit > 9) 
+	//           digit = 10 + (c & 0xdf) - 'A';
+	//         a[ai] = (a[ai] << 4) + digit;
+	//       }
+	//     }
+	//     /* Get # elided and shift what's after to the end */
+	//     cc=8-ai;
+	//     for(i=0;i<cc;i++) {
+	//       if ((8-i-cc) <= scc) {
+	//         a[7-i] = 0;
+	//       } else {
+	//         a[7-i] = a[8-i-cc];
+	//         a[8-i-cc]=0;
+	//       }
+	//     }
+	//     sprintf(lladdr,"fe80::%x:%x:%x:%x",a[1]&0xfefd,a[2],a[3],a[7]);
+	//     if (timestamp) stamptime();
+	//     ssystem("ifconfig %s add %s/64", tundev, lladdr);
+	//   }
 
-/* radvd needs a link local address for routing */
-// #if 0
-/* fe80::1/64 is good enough */
-    ssystem("ifconfig %s add fe80::200:0:0:1/64", tundev);
-// #elif 1
-// /* Generate a link local address a la sixxs/aiccu */
-// /* First a full parse, stripping off the prefix length */
-//   {
-//     char lladdr[40];
-//     char c, *ptr=(char *)ipaddr;
-//     uint16_t digit,ai,a[8],cc,scc,i;
-//     for(ai=0; ai<8; ai++) {
-//       a[ai]=0;
-//     }
-//     ai=0;
-//     cc=scc=0;
-//     while(c=*ptr++) {
-//       if(c=='/') break;
-//       if(c==':') {
-//         if(cc)
-//           scc = ai;
-//         cc = 1;
-//         if(++ai>7) break;
-//       } else {
-//         cc=0;
-//         digit = c-'0';
-//         if (digit > 9) 
-//           digit = 10 + (c & 0xdf) - 'A';
-//         a[ai] = (a[ai] << 4) + digit;
-//       }
-//     }
-//     /* Get # elided and shift what's after to the end */
-//     cc=8-ai;
-//     for(i=0;i<cc;i++) {
-//       if ((8-i-cc) <= scc) {
-//         a[7-i] = 0;
-//       } else {
-//         a[7-i] = a[8-i-cc];
-//         a[8-i-cc]=0;
-//       }
-//     }
-//     sprintf(lladdr,"fe80::%x:%x:%x:%x",a[1]&0xfefd,a[2],a[3],a[7]);
-//     if (timestamp) stamptime();
-//     ssystem("ifconfig %s add %s/64", tundev, lladdr);
-//   }
-
-    ssystem("ifconfig %s\n", tundev);
+	ssystem("ifconfig %s\n", tundev);
 }
 
 /*--------------------------------------------------------------------- */
@@ -751,21 +607,26 @@ void ifconf_tun(const char *tundev, const char *ipaddr)
 /* Close files, delete pipe etc... */
 void cleanup(void)
 {
-    printf( "Shut down, close files, kill the listening terminal\n" );
-    if( wisebed_listening_file == NULL )
-        fclose( wisebed_listening_file );
-    
-    if( tunnel_fd > 0 )
-    {
-        ssystem("ifconfig %s down", tundev);
-        close( tunnel_fd );
-    }
-    
-    ssystem( "ps aux | grep \"gnome-terminal -x sh -c java -Dtestbed.secretreservationkeys\" | awk '{print $2}' | xargs kill -9" );
-    
-    //Delete listening pipe
-    unlink(wisebed_listening_pipe);
-    
+	printf( "Shut down, close files, kill the listening terminal\n" );
+	if( wisebed_listening_file == NULL )
+		fclose( wisebed_listening_file );
+	
+	if( wisebed_sending_file == NULL )
+		fclose( wisebed_sending_file );
+	
+	if( tunnel_fd > 0 )
+	{
+		ssystem("ifconfig %s down", tundev);
+		close( tunnel_fd );
+	}
+	
+	ssystem( "ps aux | grep \"java -Dtestbed.secretreservationkeys\" | awk '{print $2}' | xargs kill -9" );
+	
+	ssystem( "ps aux | grep \"java -Dtestbed.secretreservationkeys\" | awk '{print $2}' | xargs kill -9" );
+	
+	//Delete listening pipe
+	unlink(wisebed_listening_pipe);
+	unlink(wisebed_sending_pipe);   
 }
 
 /*--------------------------------------------------------------------- */
