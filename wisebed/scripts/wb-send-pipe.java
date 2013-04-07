@@ -6,8 +6,8 @@
 
 	String localControllerEndpointURL	= "http://" + InetAddress.getLocalHost().getCanonicalHostName() + ":8089/controller";
 	String sessionManagementEndpointURL	= System.getProperty("testbed.sm.endpointurl");
-	String secretReservationKeys        = System.getProperty("testbed.secretreservationkeys");
-	//String messageToSend                = System.getProperty("testbed.message");
+	String secretReservationKeys          = System.getProperty("testbed.secretreservationkeys");
+	Integer maxmessageSize                = Integer.parseInt(System.getProperty("testbed.max_size"));
 	String selectedNodeUrns               = System.getProperty("testbed.nodeurns");
 	boolean csv                         = System.getProperty("testbed.listtype") != null && "csv".equals(System.getProperty("testbed.listtype"));
 
@@ -106,7 +106,7 @@
 	File  f_pipe = new File ( "/tmp/wisebed_sending_pipe" );  
 	for(;;){
 		RandomAccessFile raf = new RandomAccessFile(f_pipe, "r");//p.1
-// 		System.out.println( "open" );
+
 		byte[] pipe_buffer = new byte[1500];
 		int actual_pos = 0;
 		
@@ -119,14 +119,9 @@
 			}catch( IOException e ) {
 				break;
 			}
-// 			System.out.println( "read" );
-// 				System.out.println( tmp );
 				pipe_buffer[actual_pos] = (byte)tmp;
 				
-				if( actual_pos == 145 || actual_pos > 1 && pipe_buffer[actual_pos] == SLIP_END ) {
-					
-// 					System.out.println( "send " + actual_pos );
-					
+				if( actual_pos == maxmessageSize || actual_pos > 1 && pipe_buffer[actual_pos] == SLIP_END ) {
 					//copy the real size
 					byte[] messageToSendBytes = new byte[actual_pos+1];
 					for( int i = 0; i <= actual_pos; i++ )
@@ -150,10 +145,6 @@
 
 						JobResult sendJobResult = sendFuture.get();
 						sendJobResult.printResults(System.out, csv);
-// 						System.exit(sendJobResult.getSuccessPercent() < 100 ? 1 : 0);
-
-// 						log.debug("Shutting down...");
-// 						System.exit(0);
 
 					} catch (ExecutionException e) {
 						if (e.getCause() instanceof TimeoutException) {

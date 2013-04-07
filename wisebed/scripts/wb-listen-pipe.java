@@ -29,39 +29,19 @@
 				Message msg = (Message) msgs.get(i);
 				synchronized(System.out) {
 					
-// 					String text = StringUtils.replaceNonPrintableAsciiCharacters(new String(msg.getBinaryData()));
-// 
-// 					if (csv) {
-// 						text = text.replaceAll(";", "\\;");
-// 					}
-					//System.out.print(new org.joda.time.DateTime(msg.getTimestamp().toGregorianCalendar()));
-					//System.out.print(csv ? ";" : " | ");
-					
 					//Display only from the given node
 					if( msg.getSourceNodeId().equals( nodeURNs.get(0) ) )
 					{
 						byte[] byte_msg = msg.getBinaryData();
 						
-// 						System.err.print(msg.getSourceNodeId()+"|"+msg.getBinaryData().length+"|"+byte_msg+"\n");
-						
 						//The UART messages start with an i character
 						if( byte_msg[0] == 'i' )
 						{
 							//Drop the initial 'i' here
-// 							for( int k = 1; k < byte_msg.length; k++ )
-// 								System.out.print( Integer.toHexString(byte_msg[k] & 0xFF)+ " " );
-							
 							raf.write( byte_msg, 1, byte_msg.length-1 );
-// 							System.out.write( byte_msg[k]);
 						}
-// 						System.out.flush();
 					}
-					//System.out.print(csv ? ";" : " | ");
-					//System.out.print(text);
-// 					System.out.print();
-// 					System.out.print();
-					//System.out.println();
-            	}
+				}
 			}
 		}
 		public void receiveStatus(List requestStatuses) {
@@ -138,11 +118,5 @@
 	}
 	
 	while(true) {
-// 		System.err.println( "READ WHILE ");
 		Thread.sleep(60*1000);
-// 		try {
-// 			System.in.read();
-// 		} catch (Exception e) {
-// 			System.err.println(e);
-// 		}
 	}

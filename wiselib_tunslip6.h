@@ -1,17 +1,85 @@
+//**********************************************
+//**	Wiselib IPv6 SLIP communication tool  **
+//**    created by: Dániel Géhberger (2013)   **
+//**********************************************
 
-void cleanup(void);
-void sigcleanup(int signo);
-int pipe_to_tun( FILE* pipe_fd, int tun_fd );
+/**
+ * This program is a SLIP (Serial Line IP - RFC1055) implementation for the IPv6 protocol stack of the Wiselib.
+ * The tool has only one working mode at the moment which is a communication with nodes in the Wisebed testbed environment.
+ * (Support for direct attached devices is planned)
+ * The tool uses the modified java scripts of the Wisebed experimentation scripts for the communication. This program starts
+ * the listen and send scripts as backgorund processes, and uses linux named pipes for the communication between the
+ * this C and the java programs.
+ * 
+ * The code for the sensor devices is available in the Wisebed's GIT: https://github.com/ibr-alg/wiselib
+ * For the border-router node, the IPv6_SLIP_RS must be defined in the wiselib.testing/algorithms/6lowpan/lowpan_config.h
+ * The nodes can be reserved with the experimentation scripts
+ * 	https://github.com/wisebed/experimentation-scripts/wiki/Experimentation-Scripts-0.8
+ * 
+ * Then this tool can be started:
+ * 
+ * make
+ * sudo ./wiselib_tunslip6 -W -R[RESERVATION-KEY] -B[BORDER-ROUTER-URN] [TUN-IP]
+ * 
+ * eg.: sudo ./wiselib_tunslip6 -W -Rurn:wisebed:uzl1:,823DF1FFC891875533D5F62B22A9AD24 -Burn:wisebed:uzl1:0x2140 aaaa::1/64
+ */
+
+
+/**
+ * This function allocates the resoures for the TUN virtual interface
+ */
 int tun_alloc(char *dev);
+
+/**
+ * Configure the TUN interface and routing
+ */
 void ifconf_tun(const char *tundev, const char *ipaddr);
+
+/** 
+ * Called at shutdown of the application (registered fog signals as well)
+ * Close files, kill the wisebed communication scripts
+ * Delete pipes
+ */
+void cleanup(void);
+
+/**
+ * Only calls cleanup()
+ */
+void sigcleanup(int signo);
+
+/**
+ * This function is called by the main loop when there is some data from the pipe (Wisebed)
+ * It reads all bytes from the pipe, which can be more then one packet.
+ * Based on the SLIP bytes it writes the packets to the TUN interface's file
+ */
+void pipe_to_tun( FILE* pipe_fd, int tun_fd );
+
+/**
+ * This function is called by the main loop when there is some data from the TUN interface.
+ * It only copies the packet into a temporary buffer and calls the buffer_to_border_router function.
+ */
 void tun_to_buffer();
-void router_configuration_to_buffer();
-void buffer_to_wisebed( unsigned char* tunbuffer, int size );
 
+/**
+ * This function is called by the pipe_to_tun when there is a Router Sollicitation message from the border-router
+ * The Router Advertisement message is mostly predefined, this function adds the IP addresses and calls
+ * the buffer_to_border_router function
+ */
+void router_configuration_to_buffer( unsigned char* RS_buffer, int RS_size );
 
+/**
+ * This function gets a buffer with a normal IPv6 packet.
+ * It encapsulates the packet with the SLIP protocol into an innner buffer, opens the pipe of the outgoing packets
+ * and writes the conent into it.
+ * This function supports the fragmentation of the packet, which can be configured with the -s option at startup, but
+ * it is 1500 bytes by default (no fragmentation).
+ */
+void buffer_to_border_router( unsigned char* tunbuffer, int size );
+
+//Buffer size for the IP packets
 #define BUFFER_SIZE 1500
-#define SENDING_TO_WISEBED_MAX_SIZE 145
 
+//Working modes
 #define WISEBED_MODE 1
 #define SERIAL_MODE 2
 
