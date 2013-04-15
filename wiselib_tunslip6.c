@@ -63,7 +63,7 @@ char* border_router_node = NULL;
 char* listen_java_location = "wisebed/scripts/wb-listen-pipe.java";
 char* send_java_location = "wisebed/scripts/wb-send-pipe.java";
 //Maximum size for the outgoing packets
-int to_wisebed_max_size = 1500;
+int to_wisebed_max_size = 499;
 
 //IPv6 tunnel filedescriptor
 int tunnel_fd = 0;
@@ -130,7 +130,7 @@ int main(int argc, char **argv)
 		fprintf(stderr," -R  reservation_code   WISEBED: Reservation code\n");
 		fprintf(stderr," -B  border_router_URN  WISEBED: URN of the border router node (eg:urn:wisebed:uzl1:0x2100)\n");
 		fprintf(stderr," -C  config_file        WISEBED: Place of the config file (default: wisebed/live.properties)\n");
-		fprintf(stderr," -s  size               WISEBED: max fragment length to WISEBED (default 1500)\n");
+		fprintf(stderr," -s  size               WISEBED: max fragment length to WISEBED (default 499)\n");
 		fprintf(stderr," -t  tundev             Name of the IPv6 interface (default tun0)\n");
 		/*fprintf(stderr," -v[level]      Verbosity level\n");
 		fprintf(stderr,"    -v0         No messages\n");
