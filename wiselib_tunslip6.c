@@ -105,7 +105,7 @@ int main(int argc, char **argv)
 		break;
 		
 		case 's':
-		to_wisebed_max_size = (int)(*optarg);
+		to_wisebed_max_size = atoi(optarg);
 		break;
 
 		case 't':
@@ -193,7 +193,7 @@ int main(int argc, char **argv)
 		strcpy(tundev, "tun0");
 	}
 	
-	//     printf("things: %s %s %s %s", reservation_key, border_router_node, config_path, ipaddr );
+// 	    printf("things: %s %s %s %s %i", reservation_key, border_router_node, config_path, ipaddr, to_wisebed_max_size );
 
 	//For IO handling
 	fd_set rset;
