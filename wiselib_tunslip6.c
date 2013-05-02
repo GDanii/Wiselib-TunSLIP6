@@ -507,86 +507,83 @@ void buffer_to_border_router( unsigned char* tunbuffer, int size )
 		int sending_shift = 0;
 		do
 		{
-			int maximum_sendable_size = to_wisebed_max_size;
-			
 			//Determine the size of the actual message fragment,
-			int actual_sending_size = maximum_sendable_size;
+			int sendable_packet_bytes;
+			//Count the extra characters
+			int SLIP_characters = 0;
 			
 			//If the message is shorter
-			if( size < actual_sending_size )
-				actual_sending_size = size;
-			
+			if( size < to_wisebed_max_size )
+				sendable_packet_bytes = size;
+			else
+				sendable_packet_bytes = to_wisebed_max_size;
 			
 			//Parse into a tunbuffer
-			unsigned char buf_str[actual_sending_size];
+			unsigned char buf_str[to_wisebed_max_size + 2];
 			int buffer_actual_position = 0;
 			
 			//Initial 0x0A byte which is needed for the WISEBED communication
-			buf_str[buffer_actual_position++] = SLIP_SEND_WISEBED_INITIAL;
+// 			buf_str[buffer_actual_position++] = SLIP_SEND_WISEBED_INITIAL;
+// 			SLIP_characters++;
+			//Reduce the number of sendable normal bytes if it would overflow the buffer
+// 			if( to_wisebed_max_size - SLIP_characters < sendable_packet_bytes )
+// 				sendable_packet_bytes--;
 			
 			//Initial END for the IP packet
 			if( first_fragment == 1 )
 			{
 				buf_str[buffer_actual_position++] = SLIP_END;
+				SLIP_characters++;
 				first_fragment = 0;
-				//Reduce the max bytes to prevent longer messages than expected if it is needed
-				if( actual_sending_size == maximum_sendable_size )
-				{
-					maximum_sendable_size--;
-					actual_sending_size--;
-				}
+				//Reduce the number of sendable normal bytes if it would overflow the buffer
+				if( to_wisebed_max_size - SLIP_characters < sendable_packet_bytes )
+					sendable_packet_bytes--;
 			}
 			
 			int i;
-			for (i = 0; i < actual_sending_size; i++)
+			for (i = 0; i < sendable_packet_bytes; i++)
 			{
 				//Escape the ESC and END characters
 				if( tunbuffer[i+sending_shift] == SLIP_END )
 				{
 					buf_str[buffer_actual_position++] = SLIP_ESC;
 					buf_str[buffer_actual_position++] = SLIP_ESC_END;
-					//Reduce the max bytes to prevent longer messages than expected if it is needed
-					//If this was the last byte in the loop, then the message will be longer...
-					//but do not loose a byte from the IP packet
-					if( actual_sending_size == maximum_sendable_size && i < (actual_sending_size-1) )
-					{
-						maximum_sendable_size--;
-						actual_sending_size--;
-					}
+					SLIP_characters++;
+					//Reduce the number of sendable normal bytes if it would overflow the buffer
+					//Do not reduce if this is the last byte --> +1 overflow
+					if( to_wisebed_max_size - SLIP_characters < sendable_packet_bytes && i < (sendable_packet_bytes-1))
+						sendable_packet_bytes--;
 				}
 				else if( tunbuffer[i+sending_shift] == SLIP_ESC )
 				{
 					buf_str[buffer_actual_position++] = SLIP_ESC;
 					buf_str[buffer_actual_position++] = SLIP_ESC_ESC;
-					//Reduce the max bytes to prevent longer messages than expected if it is needed
-					//If this was the last byte in the loop, then the message will be longer...
-					//but do not loose a byte from the IP packet
-					if( actual_sending_size == maximum_sendable_size && i < (actual_sending_size-1) )
-					{
-						maximum_sendable_size--;
-						actual_sending_size--;
-					}
+					SLIP_characters++;
+					//Reduce the number of sendable normal bytes if it would overflow the buffer
+					//Do not reduce if this is the last byte --> +1 overflow
+					if( to_wisebed_max_size - SLIP_characters < sendable_packet_bytes && i < (sendable_packet_bytes-1))
+						sendable_packet_bytes--;
 				}
 				else
 					buf_str[buffer_actual_position++] = tunbuffer[i+sending_shift];
 			}
 			//add sent bytes
-			sending_shift += actual_sending_size;
+			sending_shift += sendable_packet_bytes;
 			//reduce remaining size
-			size -= actual_sending_size;
+			size -= sendable_packet_bytes;
 			
-			//Add the byte END to the end of the IP packet
+			//Add the byte END to the end of the IP packet --> can cause +1 overflow
 			if( size == 0 )
 			{
 				buf_str[buffer_actual_position++] = SLIP_END;
-				first_fragment = 0;
+				SLIP_characters++;
 			}
 			
 			time (&last_send_time);
 			timeinfo = localtime (&last_send_time);
 			strftime (time_buffer,40,"%r",timeinfo);
 			printf( "%s: To WISEBED size %i\n", time_buffer, buffer_actual_position );
-			
+
 			//Open the pipe
 			int wisebed_sending_fd = open( wisebed_sending_pipe, O_RDWR | O_NONBLOCK );        
 			if( wisebed_sending_fd < 1 )

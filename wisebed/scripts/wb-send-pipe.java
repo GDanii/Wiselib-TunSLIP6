@@ -102,6 +102,7 @@
 	}
 	
 	byte SLIP_END = 192;
+	byte SLIP_ESC = 219;
 	
 	File  f_pipe = new File ( "/tmp/wisebed_sending_pipe" );  
 	for(;;){
@@ -121,15 +122,21 @@
 			}
 				pipe_buffer[actual_pos] = (byte)tmp;
 				
-				if( actual_pos == maxmessageSize || actual_pos > 1 && pipe_buffer[actual_pos] == SLIP_END ) {
+				//Do not split the ESC and ESC_ESC/ESC_END from each other
+				if( pipe_buffer[actual_pos] != SLIP_ESC && (
+					actual_pos >= maxmessageSize || (actual_pos > 0 && pipe_buffer[actual_pos] == SLIP_END) )) {
 					//copy the real size
-					byte[] messageToSendBytes = new byte[actual_pos+1];
+					byte[] messageToSendBytes = new byte[actual_pos+2];
+					//Wisebed initial byte
+					messageToSendBytes[0] = (byte)0x0A;
+					
+// 					System.out.print( Integer.toHexString(messageToSendBytes[0] & 0xFF)+ " " );
 					for( int i = 0; i <= actual_pos; i++ )
 					{
-						messageToSendBytes[i] = pipe_buffer[i];
-// 						System.out.print( Integer.toHexString(messageToSendBytes[i] & 0xFF)+ " " );
+						messageToSendBytes[i+1] = pipe_buffer[i];
+// 						System.out.print( Integer.toHexString(messageToSendBytes[i+1] & 0xFF)+ " " );
 					}
-				
+// 					System.out.println( "JAVA Send " + actual_pos );
 					// Constructing the Message
 					Message binaryMessage = new Message();
 					binaryMessage.setBinaryData(messageToSendBytes);
